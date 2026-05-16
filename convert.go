@@ -205,7 +205,9 @@ func convertMessagesForDeepSeek(messages []Message) []map[string]interface{} {
 	converted := make([]map[string]interface{}, 0, len(messages))
 	for _, msg := range messages {
 		clean := map[string]interface{}{}
-		if msg.Role != "" {
+		if msg.Role == "developer" {
+			clean["role"] = "system"
+		} else if msg.Role != "" {
 			clean["role"] = msg.Role
 		}
 		content := normalizeContent(msg.Content)
