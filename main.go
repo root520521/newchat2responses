@@ -61,6 +61,8 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 保存客户端原始模型名（resolveModel 会将其转换为上游名称）
+	clientModel := req.Model
 	req.Model = resolveModel(req.Model)
 
 	// 无论是否做模型转换，转发前始终修复 tool_call 间隙。
@@ -203,6 +205,8 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		outBody = convertedResp
 	}
+	// 将响应中的 model 替换为客户端请求的别名（掩盖上游真实模型名）
+	outBody = applyModelAlias(outBody, clientModel)
 
 	for k, v := range resp.Header {
 		w.Header()[k] = v
@@ -212,7 +216,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(outBody)
 }
 
-// listModelsHandler 处理 /v1/models 请求，透传上游模型列表。
+// listModelsHandler 处理 /v1/models 请求，将上游模型名替换为客户端别名。
 func listModelsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "不允许的请求方法", http.StatusMethodNotAllowed)
@@ -232,14 +236,37 @@ func listModelsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	for k, v := range resp.Header {
-		for _, val := range v {
-			w.Header().Add(k, val)
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		w.WriteHeader(resp.StatusCode)
+		w.Write(respBody)
+		return
+	}
+
+	// 将上游模型名替换为客户端别名（掩盖上游真实模型名）
+	reverseAlias := getReverseModelAlias()
+	var rawList map[string]interface{}
+	if err := json.Unmarshal(respBody, &rawList); err == nil {
+		if models, ok := rawList["data"].([]interface{}); ok {
+			for i, m := range models {
+				if mmap, ok := m.(map[string]interface{}); ok {
+					if upstreamName, ok := mmap["id"].(string); ok {
+						if clientName, found := reverseAlias[upstreamName]; found {
+							mmap["id"] = clientName
+						}
+					}
+				}
+				models[i] = m
+			}
+			rawList["data"] = models
+			respBody, _ = json.Marshal(rawList)
 		}
 	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	w.Write(respBody)
 }
 
 // responsesHandler 将 OpenAI Responses API 请求转为 Chat Completions 并转回响应格式
@@ -287,6 +314,7 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	clientModelResp := respReq.Model
 	respReq.Model = resolveModel(respReq.Model)
 
 	messages := respReq.Messages
@@ -414,7 +442,7 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// 直接传原始 Body（流式读取，不缓冲）
-		responsesStreamHandler(w, r, resp, respReq.Model, chatReq.Model, wantReasoning, respReq.Tools, respReq.ToolChoice)
+		responsesStreamHandler(w, r, resp, clientModelResp, chatReq.Model, wantReasoning, respReq.Tools, respReq.ToolChoice)
 		return
 	}
 
@@ -429,7 +457,7 @@ func responsesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 转换 Chat Completions 响应为 Responses 格式
-	responsesBody := convertChatToResponses(respBody, respReq.Model, wantReasoning, respReq.Tools, respReq.ToolChoice)
+	responsesBody := convertChatToResponses(respBody, clientModelResp, wantReasoning, respReq.Tools, respReq.ToolChoice)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 

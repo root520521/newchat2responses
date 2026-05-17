@@ -19,6 +19,32 @@ func resolveModel(model string) string {
 	return m
 }
 
+// getReverseModelAlias 构建从上游模型名到客户端别名的反向映射
+func getReverseModelAlias() map[string]string {
+	reverse := map[string]string{}
+	aliases := getModelAliasFast()
+	for clientName, upstreamName := range aliases {
+		reverse[upstreamName] = clientName
+	}
+	return reverse
+}
+
+// applyModelAlias 将响应中的上游 model 替换为客户端请求的别名
+func applyModelAlias(data []byte, clientModel string) []byte {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return data
+	}
+	if raw["model"] != nil {
+		raw["model"] = clientModel
+	}
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return data
+	}
+	return out
+}
+
 // shouldConvertModel 判断是否需要对模型进行 DeepSeek 特定优化转换。
 // 匹配条件：模型名在 config.model_list 列表中，或模型名包含 "deepseek" 关键词。
 // 若返回 false，则使用通用格式转换（不注入 thinking/reasoning_effort 等 DeepSeek 专用字段）。
