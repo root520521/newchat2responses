@@ -182,6 +182,10 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 			}
+			// SSE 流式响应中也替换 model 字段（掩盖上游真实模型名）
+			if strings.HasPrefix(strings.TrimSpace(out), "data: ") {
+				out = "data: " + string(applyModelAlias([]byte(out[6:]), clientModel))
+			}
 			w.Write([]byte(out))
 			w.Write([]byte("\n"))
 			if f, ok := w.(http.Flusher); ok {
